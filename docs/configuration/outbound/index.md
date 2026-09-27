@@ -17,25 +17,29 @@
 
 | Type           | Format                         |
 |----------------|--------------------------------|
-| `direct`       | [Direct](./direct)             |
-| `block`        | [Block](./block)               |
-| `socks`        | [SOCKS](./socks)               |
-| `http`         | [HTTP](./http)                 |
-| `shadowsocks`  | [Shadowsocks](./shadowsocks)   |
-| `vmess`        | [VMess](./vmess)               |
-| `trojan`       | [Trojan](./trojan)             |
-| `wireguard`    | [Wireguard](./wireguard)       |
-| `hysteria`     | [Hysteria](./hysteria)         |
-| `shadowsocksr` | [ShadowsocksR](./shadowsocksr) |
-| `vless`        | [VLESS](./vless)               |
-| `shadowtls`    | [ShadowTLS](./shadowtls)       |
-| `tuic`         | [TUIC](./tuic)                 |
-| `hysteria2`    | [Hysteria2](./hysteria2)       |
-| `tor`          | [Tor](./tor)                   |
-| `ssh`          | [SSH](./ssh)                   |
-| `dns`          | [DNS](./dns)                   |
-| `selector`     | [Selector](./selector)         |
-| `urltest`      | [URLTest](./urltest)           |
+| `direct`       | [Direct](./direct/)             |
+| `bridge`       | [Bridge](./bridge/)             |
+| `block`        | [Block](./block/)               |
+| `socks`        | [SOCKS](./socks/)               |
+| `http`         | [HTTP](./http/)                 |
+| `shadowsocks`  | [Shadowsocks](./shadowsocks/)   |
+| `vmess`        | [VMess](./vmess/)               |
+| `trojan`       | [Trojan](./trojan/)             |
+| `wireguard`    | [Wireguard](./wireguard/)       |
+| `hysteria`     | [Hysteria](./hysteria/)         |
+| `vless`        | [VLESS](./vless/)               |
+| `shadowtls`    | [ShadowTLS](./shadowtls/)       |
+| `tuic`         | [TUIC](./tuic/)                 |
+| `hysteria2`    | [Hysteria2](./hysteria2/)       |
+| `anytls`       | [AnyTLS](./anytls/)             |
+| `snell`        | [Snell](./snell/)               |
+| `tailcat`      | [Tailcat](./tailcat/)           |
+| `tor`          | [Tor](./tor/)                   |
+| `ssh`          | [SSH](./ssh/)                   |
+| `dns`          | [DNS](./dns/)                   |
+| `selector`     | [Selector](./selector/)         |
+| `urltest`      | [URLTest](./urltest/)           |
+| `naive`        | [NaiveProxy](./naive/)          |
 
 #### tag
 

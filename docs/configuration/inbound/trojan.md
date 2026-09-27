@@ -31,7 +31,7 @@
 
 ### Listen Fields
 
-See [Listen Fields](/configuration/shared/listen) for details.
+See [Listen Fields](/configuration/shared/listen/) for details.
 
 ### Fields
 
@@ -47,7 +47,7 @@ TLS configuration, see [TLS](/configuration/shared/tls/#inbound).
 
 #### fallback
 
-!!! error ""
+!!! failure ""
 
     There is no evidence that GFW detects and blocks Trojan servers based on HTTP responses, and opening the standard http/s port on the server is a much bigger signature.
 
@@ -65,4 +65,4 @@ See [Multiplex](/configuration/shared/multiplex#inbound) for details.
 
 #### transport
 
-V2Ray Transport configuration, see [V2Ray Transport](/configuration/shared/v2ray-transport).
+V2Ray Transport configuration, see [V2Ray Transport](/configuration/shared/v2ray-transport/).

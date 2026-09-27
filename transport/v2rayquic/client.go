@@ -6,20 +6,21 @@ import (
 	"context"
 	"net"
 	"sync"
+	"sync/atomic"
 
 	"github.com/sagernet/quic-go"
+	"github.com/sagernet/quic-go/http3"
 	"github.com/sagernet/sing-box/adapter"
 	"github.com/sagernet/sing-box/common/tls"
 	C "github.com/sagernet/sing-box/constant"
 	"github.com/sagernet/sing-box/option"
 	"github.com/sagernet/sing-quic"
 	"github.com/sagernet/sing/common"
-	"github.com/sagernet/sing/common/bufio"
 	M "github.com/sagernet/sing/common/metadata"
 	N "github.com/sagernet/sing/common/network"
 )
 
-var _ adapter.V2RayClientTransport = (*Client)(nil)
+var _ adapter.V2RayMultiplexClientTransport = (*Client)(nil)
 
 type Client struct {
 	ctx        context.Context
@@ -28,8 +29,26 @@ type Client struct {
 	tlsConfig  tls.Config
 	quicConfig *quic.Config
 	connAccess sync.Mutex
-	conn       quic.Connection
+	conn       common.TypedValue[*clientConnection]
 	rawConn    net.Conn
+	closeIdle  atomic.Bool
+}
+
+type clientConnection struct {
+	*quic.Conn
+	access    sync.Mutex
+	streams   int
+	closeIdle *atomic.Bool
+}
+
+func (c *clientConnection) releaseStream(keepSession bool) {
+	c.access.Lock()
+	c.streams--
+	drained := c.closeIdle.Load() && !keepSession && c.streams == 0
+	c.access.Unlock()
+	if drained {
+		c.CloseWithError(0, "")
+	}
 }
 
 func NewClient(ctx context.Context, dialer N.Dialer, serverAddr M.Socksaddr, options option.V2RayQUICOptions, tlsConfig tls.Config) (adapter.V2RayClientTransport, error) {
@@ -37,7 +56,7 @@ func NewClient(ctx context.Context, dialer N.Dialer, serverAddr M.Socksaddr, opt
 		DisablePathMTUDiscovery: !C.IsLinux && !C.IsWindows,
 	}
 	if len(tlsConfig.NextProtos()) == 0 {
-		tlsConfig.SetNextProtos([]string{"h2", "http/1.1"})
+		tlsConfig.SetNextProtos([]string{http3.NextProtoH3})
 	}
 	return &Client{
 		ctx:        ctx,
@@ -48,14 +67,14 @@ func NewClient(ctx context.Context, dialer N.Dialer, serverAddr M.Socksaddr, opt
 	}, nil
 }
 
-func (c *Client) offer() (quic.Connection, error) {
-	conn := c.conn
+func (c *Client) offer() (*clientConnection, error) {
+	conn := c.conn.Load()
 	if conn != nil && !common.Done(conn.Context()) {
 		return conn, nil
 	}
 	c.connAccess.Lock()
 	defer c.connAccess.Unlock()
-	conn = c.conn
+	conn = c.conn.Load()
 	if conn != nil && !common.Done(conn.Context()) {
 		return conn, nil
 	}
@@ -66,21 +85,26 @@ func (c *Client) offer() (quic.Connection, error) {
 	return conn, nil
 }
 
-func (c *Client) offerNew() (quic.Connection, error) {
+func (c *Client) offerNew() (*clientConnection, error) {
 	udpConn, err := c.dialer.DialContext(c.ctx, "udp", c.serverAddr)
 	if err != nil {
 		return nil, err
 	}
-	var packetConn net.PacketConn
-	packetConn = bufio.NewUnbindPacketConn(udpConn)
-	quicConn, err := qtls.Dial(c.ctx, packetConn, udpConn.RemoteAddr(), c.tlsConfig, c.quicConfig)
+	quicConn, err := qtls.Dial(c.ctx, udpConn, c.tlsConfig, c.quicConfig)
 	if err != nil {
-		packetConn.Close()
+		udpConn.Close()
 		return nil, err
 	}
-	c.conn = quicConn
+	// quic-go does not take ownership of the conn passed to Dial:
+	// when the connection ends it only stops reading.
+	go func() {
+		<-quicConn.Context().Done()
+		udpConn.Close()
+	}()
+	conn := &clientConnection{Conn: quicConn, closeIdle: &c.closeIdle}
+	c.conn.Store(conn)
 	c.rawConn = udpConn
-	return quicConn, nil
+	return conn, nil
 }
 
 func (c *Client) DialContext(ctx context.Context) (net.Conn, error) {
@@ -88,13 +112,52 @@ func (c *Client) DialContext(ctx context.Context) (net.Conn, error) {
 	if err != nil {
 		return nil, err
 	}
+	conn.access.Lock()
+	conn.streams++
+	conn.access.Unlock()
 	stream, err := conn.OpenStream()
 	if err != nil {
+		conn.releaseStream(false)
 		return nil, err
 	}
-	return &StreamWrapper{Conn: conn, Stream: stream}, nil
+	keepSession := adapter.KeepSessionFromContext(ctx)
+	return &StreamWrapper{Conn: conn.Conn, Stream: stream, onClose: func() { conn.releaseStream(keepSession) }}, nil
+}
+
+func (c *Client) MultiplexEnabled() bool {
+	return true
+}
+
+func (c *Client) SetKeepIdleConnections(keep bool) {
+	c.closeIdle.Store(!keep)
+	if !keep {
+		c.CloseIdleConnections()
+	}
+}
+
+func (c *Client) CloseIdleConnections() {
+	conn := c.conn.Load()
+	if conn == nil {
+		return
+	}
+	conn.access.Lock()
+	drained := conn.streams == 0
+	conn.access.Unlock()
+	if drained {
+		conn.CloseWithError(0, "")
+	}
 }
 
 func (c *Client) Close() error {
-	return common.Close(c.conn, c.rawConn)
+	c.connAccess.Lock()
+	defer c.connAccess.Unlock()
+	conn := c.conn.Swap(nil)
+	if conn != nil {
+		conn.CloseWithError(0, "")
+	}
+	if c.rawConn != nil {
+		c.rawConn.Close()
+	}
+	c.rawConn = nil
+	return nil
 }

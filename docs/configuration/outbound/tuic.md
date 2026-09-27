@@ -16,14 +16,12 @@
   "heartbeat": "10s",
   "network": "tcp",
   "tls": {},
-  
+
+  ... // QUIC Fields
+
   ... // Dial Fields
 }
 ```
-
-!!! warning ""
-
-    QUIC, which is required by TUIC is not included by default, see [Installation](/#installation).
 
 ### Fields
 
@@ -72,7 +70,7 @@ Conflict with `udp_over_stream`.
 
 #### udp_over_stream
 
-This is the TUIC port of the [UDP over TCP protocol](/configuration/shared/udp-over-tcp), designed to provide a QUIC
+This is the TUIC port of the [UDP over TCP protocol](/configuration/shared/udp-over-tcp/), designed to provide a QUIC
 stream based UDP relay mode that TUIC does not provide. Since it is an add-on protocol, you will need to use sing-box or
 another program compatible with the protocol as a server.
 
@@ -95,6 +93,10 @@ Both is enabled by default.
 
 TLS configuration, see [TLS](/configuration/shared/tls/#outbound).
 
+### QUIC Fields
+
+See [QUIC Fields](/configuration/shared/quic/) for details.
+
 ### Dial Fields
 
-See [Dial Fields](/configuration/shared/dial) for details.
+See [Dial Fields](/configuration/shared/dial/) for details.

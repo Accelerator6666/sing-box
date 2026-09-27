@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/common/badhttp"
 	"github.com/sagernet/sing-box/common/tls"
 	"github.com/sagernet/sing-box/option"
 	"github.com/sagernet/sing/common/buf"
@@ -16,14 +17,12 @@ import (
 	E "github.com/sagernet/sing/common/exceptions"
 	M "github.com/sagernet/sing/common/metadata"
 	N "github.com/sagernet/sing/common/network"
-	sHTTP "github.com/sagernet/sing/protocol/http"
 )
 
 var _ adapter.V2RayClientTransport = (*Client)(nil)
 
 type Client struct {
 	dialer     N.Dialer
-	tlsConfig  tls.Config
 	serverAddr M.Socksaddr
 	requestURL url.URL
 	headers    http.Header
@@ -35,6 +34,7 @@ func NewClient(ctx context.Context, dialer N.Dialer, serverAddr M.Socksaddr, opt
 		if len(tlsConfig.NextProtos()) == 0 {
 			tlsConfig.SetNextProtos([]string{"http/1.1"})
 		}
+		dialer = tls.NewDialer(dialer, tlsConfig)
 	}
 	var host string
 	if options.Host != "" {
@@ -52,7 +52,7 @@ func NewClient(ctx context.Context, dialer N.Dialer, serverAddr M.Socksaddr, opt
 	}
 	requestURL.Host = serverAddr.String()
 	requestURL.Path = options.Path
-	err := sHTTP.URLSetPath(&requestURL, options.Path)
+	err := badhttp.URLSetPath(&requestURL, options.Path)
 	if err != nil {
 		return nil, E.Cause(err, "parse path")
 	}
@@ -65,7 +65,6 @@ func NewClient(ctx context.Context, dialer N.Dialer, serverAddr M.Socksaddr, opt
 	}
 	return &Client{
 		dialer:     dialer,
-		tlsConfig:  tlsConfig,
 		serverAddr: serverAddr,
 		requestURL: requestURL,
 		headers:    headers,
@@ -78,12 +77,6 @@ func (c *Client) DialContext(ctx context.Context) (net.Conn, error) {
 	if err != nil {
 		return nil, err
 	}
-	if c.tlsConfig != nil {
-		conn, err = tls.ClientHandshake(ctx, conn, c.tlsConfig)
-		if err != nil {
-			return nil, err
-		}
-	}
 	request := &http.Request{
 		Method: http.MethodGet,
 		URL:    &c.requestURL,
@@ -94,25 +87,34 @@ func (c *Client) DialContext(ctx context.Context) (net.Conn, error) {
 	request.Header.Set("Upgrade", "websocket")
 	err = request.Write(conn)
 	if err != nil {
+		conn.Close()
 		return nil, err
 	}
 	bufReader := std_bufio.NewReader(conn)
 	response, err := http.ReadResponse(bufReader, request)
 	if err != nil {
+		conn.Close()
 		return nil, err
 	}
 	if response.StatusCode != 101 ||
 		!strings.EqualFold(response.Header.Get("Connection"), "upgrade") ||
 		!strings.EqualFold(response.Header.Get("Upgrade"), "websocket") {
-		return nil, E.New("unexpected status: ", response.Status)
+		conn.Close()
+		response.Body.Close()
+		return nil, E.New("v2ray-http-upgrade: unexpected status: ", response.Status)
 	}
 	if bufReader.Buffered() > 0 {
 		buffer := buf.NewSize(bufReader.Buffered())
 		_, err = buffer.ReadFullFrom(bufReader, buffer.Len())
 		if err != nil {
+			conn.Close()
 			return nil, err
 		}
 		conn = bufio.NewCachedConn(conn, buffer)
 	}
 	return conn, nil
+}
+
+func (c *Client) Close() error {
+	return nil
 }

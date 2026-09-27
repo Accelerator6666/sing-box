@@ -1,30 +1,26 @@
 package box
 
 import (
+	"net"
 	"net/http"
 	"net/http/pprof"
 	"runtime"
 	"runtime/debug"
+	"strings"
 
-	"github.com/sagernet/sing-box/common/badjson"
-	"github.com/sagernet/sing-box/common/humanize"
-	"github.com/sagernet/sing-box/common/json"
 	"github.com/sagernet/sing-box/log"
 	"github.com/sagernet/sing-box/option"
+	"github.com/sagernet/sing/common/byteformats"
 	E "github.com/sagernet/sing/common/exceptions"
+	"github.com/sagernet/sing/common/json"
+	"github.com/sagernet/sing/common/json/badjson"
 
 	"github.com/go-chi/chi/v5"
 )
 
-var debugHTTPServer *http.Server
-
-func applyDebugListenOption(options option.DebugOptions) {
-	if debugHTTPServer != nil {
-		debugHTTPServer.Close()
-		debugHTTPServer = nil
-	}
+func startDebugHTTPServer(options option.DebugOptions) (*http.Server, error) {
 	if options.Listen == "" {
-		return
+		return nil, nil
 	}
 	r := chi.NewMux()
 	r.Route("/debug", func(r chi.Router) {
@@ -37,31 +33,44 @@ func applyDebugListenOption(options option.DebugOptions) {
 			runtime.ReadMemStats(&memStats)
 
 			var memObject badjson.JSONObject
-			memObject.Put("heap", humanize.MemoryBytes(memStats.HeapInuse))
-			memObject.Put("stack", humanize.MemoryBytes(memStats.StackInuse))
-			memObject.Put("idle", humanize.MemoryBytes(memStats.HeapIdle-memStats.HeapReleased))
+			memObject.Put("heap", byteformats.FormatMemoryBytes(memStats.HeapInuse))
+			memObject.Put("stack", byteformats.FormatMemoryBytes(memStats.StackInuse))
+			memObject.Put("idle", byteformats.FormatMemoryBytes(memStats.HeapIdle-memStats.HeapReleased))
 			memObject.Put("goroutines", runtime.NumGoroutine())
 			memObject.Put("rss", rusageMaxRSS())
 
 			encoder := json.NewEncoder(writer)
 			encoder.SetIndent("", "  ")
-			encoder.Encode(memObject)
+			encoder.Encode(&memObject)
 		})
-		r.HandleFunc("/pprof", pprof.Index)
-		r.HandleFunc("/pprof/*", pprof.Index)
-		r.HandleFunc("/pprof/cmdline", pprof.Cmdline)
-		r.HandleFunc("/pprof/profile", pprof.Profile)
-		r.HandleFunc("/pprof/symbol", pprof.Symbol)
-		r.HandleFunc("/pprof/trace", pprof.Trace)
+		r.Route("/pprof", func(r chi.Router) {
+			r.HandleFunc("/", func(writer http.ResponseWriter, request *http.Request) {
+				if !strings.HasSuffix(request.URL.Path, "/") {
+					http.Redirect(writer, request, request.URL.Path+"/", http.StatusMovedPermanently)
+				} else {
+					pprof.Index(writer, request)
+				}
+			})
+			r.HandleFunc("/*", pprof.Index)
+			r.HandleFunc("/cmdline", pprof.Cmdline)
+			r.HandleFunc("/profile", pprof.Profile)
+			r.HandleFunc("/symbol", pprof.Symbol)
+			r.HandleFunc("/trace", pprof.Trace)
+		})
 	})
-	debugHTTPServer = &http.Server{
+	server := &http.Server{
 		Addr:    options.Listen,
 		Handler: r,
 	}
+	listener, err := net.Listen("tcp", options.Listen)
+	if err != nil {
+		return nil, E.Cause(err, "listen debug HTTP server")
+	}
 	go func() {
-		err := debugHTTPServer.ListenAndServe()
+		err := server.Serve(listener)
 		if err != nil && !E.IsClosed(err) {
 			log.Error(E.Cause(err, "serve debug HTTP server"))
 		}
 	}()
+	return server, nil
 }

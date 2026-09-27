@@ -4,12 +4,23 @@ import (
 	"context"
 	"os"
 	"time"
+
+	"github.com/sagernet/sing/common"
 )
 
 var std ContextLogger
 
 func init() {
-	std = NewFactory(Formatter{BaseTime: time.Now()}, os.Stderr, nil).Logger()
+	factory := NewDefaultFactory(
+		context.Background(),
+		Formatter{BaseTime: time.Now()},
+		os.Stderr,
+		"",
+		nil,
+		false,
+	)
+	common.Must(factory.Start())
+	std = factory.Logger()
 }
 
 func StdLogger() ContextLogger {

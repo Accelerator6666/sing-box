@@ -11,11 +11,13 @@ type (
 )
 
 type Factory interface {
+	Start() error
+	Close() error
 	Level() Level
 	SetLevel(level Level)
 	Logger() ContextLogger
 	NewLogger(tag string) ContextLogger
-	Close() error
+	AttachPlatformWriter(writer PlatformWriter)
 }
 
 type ObservableFactory interface {

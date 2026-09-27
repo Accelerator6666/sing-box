@@ -18,17 +18,15 @@
   "auth_timeout": "3s",
   "zero_rtt_handshake": false,
   "heartbeat": "10s",
-  "tls": {}
+  "tls": {},
+
+  ... // QUIC Fields
 }
 ```
 
-!!! warning ""
-
-    QUIC, which is required by TUIC is not included by default, see [Installation](/#installation).
-
 ### Listen Fields
 
-See [Listen Fields](/configuration/shared/listen) for details.
+See [Listen Fields](/configuration/shared/listen/) for details.
 
 ### Fields
 
@@ -80,3 +78,7 @@ Interval for sending heartbeat packets for keeping the connection alive
 ==Required==
 
 TLS configuration, see [TLS](/configuration/shared/tls/#inbound).
+
+### QUIC Fields
+
+See [QUIC Fields](/configuration/shared/quic/) for details.

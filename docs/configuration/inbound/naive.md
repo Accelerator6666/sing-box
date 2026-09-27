@@ -1,30 +1,31 @@
+!!! quote "Changes in sing-box 1.13.0"
+
+    :material-plus: [quic_congestion_control](#quic_congestion_control)
+
 ### Structure
 
 ```json
 {
-  "type": "naive",
-  "tag": "naive-in",
-  "network": "udp",
+"type": "naive",
+"tag": "naive-in",
+"network": "udp",
+...
+// Listen Fields
 
-  ... // Listen Fields
-
-  "users": [
-    {
-      "username": "sekai",
-      "password": "password"
-    }
-  ],
-  "tls": {}
+"users": [
+{
+"username": "sekai",
+"password": "password"
+}
+],
+"quic_congestion_control": "",
+"tls": {}
 }
 ```
 
-!!! warning ""
-
-    HTTP3 transport is not included by default, see [Installation](/#installation).
-
 ### Listen Fields
 
-See [Listen Fields](/configuration/shared/listen) for details.
+See [Listen Fields](/configuration/shared/listen/) for details.
 
 ### Fields
 
@@ -39,6 +40,20 @@ Both if empty.
 ==Required==
 
 Naive users.
+
+#### quic_congestion_control
+
+!!! question "Since sing-box 1.13.0"
+
+QUIC congestion control algorithm.
+
+| Algorithm      | Description                     |
+|----------------|---------------------------------|
+| `bbr`          | BBR                             |
+| `cubic`        | CUBIC                           |
+| `reno`         | New Reno                        |
+
+`bbr` is used by default.
 
 #### tls
 

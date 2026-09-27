@@ -35,38 +35,39 @@ jobs:
           git remote add upstream https://github.com/SagerNet/sing-box.git
           git fetch upstream testing
 
-      - name: Check whether upstream changed
+      - name: Check whether upstream content changed
         id: check
         shell: bash
         run: |
-          UPSTREAM_SHA="$(git rev-parse upstream/testing)"
-          if git rev-parse HEAD^ >/dev/null 2>&1; then
-            BASE_SHA="$(git rev-parse HEAD^)"
-          else
-            BASE_SHA=""
-          fi
-
-          echo "upstream_sha=$UPSTREAM_SHA"
-          echo "base_sha=$BASE_SHA"
-
-          if [ "$BASE_SHA" = "$UPSTREAM_SHA" ]; then
+          if git diff --quiet HEAD upstream/testing -- . ':(exclude).github/workflows'; then
             echo "changed=false" >> "$GITHUB_OUTPUT"
           else
             echo "changed=true" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Sync branch and preserve workflow
+      - name: Sync content and preserve workflows
         if: steps.check.outputs.changed == 'true'
         shell: bash
         run: |
-          cp .github/workflows/sync-upstream.yml /tmp/sync-upstream.yml
+          rm -rf /tmp/fork-workflows
+          mkdir -p /tmp/fork-workflows
+          if [ -d .github/workflows ]; then
+            cp -a .github/workflows/. /tmp/fork-workflows/
+          fi
 
-          git reset --hard upstream/testing
+          git rm -r --ignore-unmatch .
+          git checkout upstream/testing -- .
 
+          rm -rf .github/workflows
           mkdir -p .github/workflows
-          cp /tmp/sync-upstream.yml .github/workflows/sync-upstream.yml
+          cp -a /tmp/fork-workflows/. .github/workflows/
 
-          git add .github/workflows/sync-upstream.yml
-          git commit -m "ci: preserve automatic upstream sync"
+          git add -A
 
-          git push origin HEAD:dev-next --force-with-lease
+          if git diff --cached --quiet; then
+            echo "No content changes to commit."
+            exit 0
+          fi
+
+          git commit -m "sync: align with SagerNet/sing-box:testing"
+          git push origin HEAD:dev-next

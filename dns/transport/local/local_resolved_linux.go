@@ -69,7 +69,7 @@ type DBusResolvedResolver struct {
 }
 
 type resolvedServerSet struct {
-	scopes          []resolvedScope
+	scopes          []*resolvedScope
 	serverAddresses []netip.Addr
 	signature       []string
 	serverScope     *adapter.Scope
@@ -91,11 +91,16 @@ const resolvedUpdateDelay = time.Second
 // SD_RESOLVED_DNS bit of org.freedesktop.resolve1.Link.ScopesMask, set when the link has a unicast DNS scope.
 const resolvedScopesMaskDNS = 1 << 0
 
+// TRANSACTION_UDP_TIMEOUT_USEC in systemd-resolved (resolved-timeouts.h), after which a transaction
+// is resent to the next server of the scope.
+const resolvedServerTimeout = 5 * time.Second
+
 type resolvedScope struct {
-	domains      []string
-	defaultRoute bool
-	fallback     bool
-	servers      []resolvedServer
+	domains       []string
+	defaultRoute  bool
+	fallback      bool
+	servers       []resolvedServer
+	currentServer atomic.Uint32
 }
 
 type resolvedServer struct {
@@ -288,31 +293,55 @@ func (t *DBusResolvedResolver) exchangeServerSet(ctx context.Context, message *m
 		callback(nil, E.New("no appropriate name servers or networks for name found"))
 		return
 	}
-	scopeExchangers := make([]dnsTransport.AsyncExchanger, 0, len(scopes))
-	for _, scope := range scopes {
-		serverExchangers := make([]dnsTransport.AsyncExchanger, 0, len(scope.servers))
-		for _, server := range scope.servers {
-			serverExchangers = append(serverExchangers, func(exchangeCtx context.Context, exchangeCallback func(response *mDNS.Msg, err error)) {
-				server.primaryTransport.ExchangeAsync(exchangeCtx, message, func(response *mDNS.Msg, exchangeErr error) {
-					if exchangeErr != nil && server.fallbackTransport != nil {
-						server.fallbackTransport.ExchangeAsync(exchangeCtx, message, exchangeCallback)
-						return
-					}
-					exchangeCallback(response, exchangeErr)
-				})
-			})
+	scopeExchangers := common.Map(scopes, func(scope *resolvedScope) dnsTransport.AsyncExchanger {
+		return func(exchangeCtx context.Context, exchangeCallback func(response *mDNS.Msg, err error)) {
+			scope.exchange(exchangeCtx, message, exchangeCallback)
 		}
-		scopeExchangers = append(scopeExchangers, func(exchangeCtx context.Context, exchangeCallback func(response *mDNS.Msg, err error)) {
-			dnsTransport.ExchangeSequential(exchangeCtx, serverExchangers, acceptResolvedServerResponse, exchangeCallback)
-		})
-	}
-	dnsTransport.ExchangeSequential(ctx, scopeExchangers, acceptResolvedScopeResponse, callback)
+	})
+	dnsTransport.ExchangeParallel(ctx, scopeExchangers, acceptResolvedScopeResponse, callback)
 }
 
-// systemd-resolved moves to the next server of a scope on SERVFAIL (resolved-dns-transaction.c
-// dns_transaction_process_reply) and completes a query with the first positive answer among the
-// scopes it is routed to, keeping a negative answer only when every scope returned one
-// (resolved-dns-query.c dns_query_ready).
+func (s *resolvedScope) exchange(ctx context.Context, message *mDNS.Msg, callback func(response *mDNS.Msg, err error)) {
+	serverCount := uint32(len(s.servers))
+	currentServer := s.currentServer.Load()
+	serverExchangers := make([]dnsTransport.AsyncExchanger, 0, serverCount)
+	for i := range serverCount {
+		serverIndex := (currentServer + i) % serverCount
+		server := s.servers[serverIndex]
+		serverExchangers = append(serverExchangers, func(exchangeCtx context.Context, exchangeCallback func(response *mDNS.Msg, err error)) {
+			server.exchange(exchangeCtx, message, func(response *mDNS.Msg, err error) {
+				if exchangeCtx.Err() == nil && !acceptResolvedServerResponse(response, err) {
+					s.currentServer.CompareAndSwap(serverIndex, (serverIndex+1)%serverCount)
+				}
+				exchangeCallback(response, err)
+			})
+		})
+	}
+	dnsTransport.ExchangeSequential(ctx, serverExchangers, acceptResolvedServerResponse, callback)
+}
+
+func (s *resolvedServer) exchange(ctx context.Context, message *mDNS.Msg, callback func(response *mDNS.Msg, err error)) {
+	exchangeResolvedTransport(ctx, s.primaryTransport, message, func(response *mDNS.Msg, err error) {
+		if err != nil && s.fallbackTransport != nil {
+			exchangeResolvedTransport(ctx, s.fallbackTransport, message, callback)
+			return
+		}
+		callback(response, err)
+	})
+}
+
+func exchangeResolvedTransport(ctx context.Context, transport adapter.DNSTransport, message *mDNS.Msg, callback func(response *mDNS.Msg, err error)) {
+	exchangeCtx, cancel := context.WithTimeout(ctx, resolvedServerTimeout)
+	transport.ExchangeAsync(exchangeCtx, message, func(response *mDNS.Msg, err error) {
+		cancel()
+		callback(response, err)
+	})
+}
+
+// systemd-resolved starts a query on every scope at the best match level at once
+// (resolved-dns-query.c dns_query_go_scopes) and completes it with the first positive answer
+// (dns_query_ready). Within a scope, SERVFAIL and timeouts move the scope to its next server, which
+// later queries start from (resolved-dns-transaction.c dns_transaction_retry).
 func acceptResolvedServerResponse(response *mDNS.Msg, err error) bool {
 	return err == nil && response.Rcode != mDNS.RcodeServerFailure
 }
@@ -321,10 +350,10 @@ func acceptResolvedScopeResponse(response *mDNS.Msg, err error) bool {
 	return err == nil && response.Rcode == mDNS.RcodeSuccess
 }
 
-func (s *resolvedServerSet) selectScopes(name string) []resolvedScope {
+func (s *resolvedServerSet) selectScopes(name string) []*resolvedScope {
 	var (
 		bestMatch      = resolvedScopeNoMatch
-		selectedScopes []resolvedScope
+		selectedScopes []*resolvedScope
 	)
 	for _, scope := range s.scopes {
 		match := scope.match(name)
@@ -592,8 +621,8 @@ func (t *DBusResolvedResolver) loadResolvedLinkScope(ctx context.Context, manage
 	return linkScope, true, nil
 }
 
-func (t *DBusResolvedResolver) createResolvedScope(serverScope *adapter.Scope, scopeSpecification resolvedScopeSpecification) (resolvedScope, error) {
-	scope := resolvedScope{
+func (t *DBusResolvedResolver) createResolvedScope(serverScope *adapter.Scope, scopeSpecification resolvedScopeSpecification) (*resolvedScope, error) {
+	scope := &resolvedScope{
 		domains:      scopeSpecification.domains,
 		defaultRoute: scopeSpecification.defaultRoute,
 		fallback:     scopeSpecification.fallback,
@@ -605,12 +634,12 @@ func (t *DBusResolvedResolver) createResolvedScope(serverScope *adapter.Scope, s
 		},
 	})
 	if err != nil {
-		return resolvedScope{}, err
+		return nil, err
 	}
 	for _, serverSpecification := range scopeSpecification.servers {
 		server, createErr := t.createResolvedServer(serverScope, serverDialer, scopeSpecification.dnsOverTLSMode, serverSpecification)
 		if createErr != nil {
-			return resolvedScope{}, createErr
+			return nil, createErr
 		}
 		scope.servers = append(scope.servers, server)
 	}
